@@ -12,7 +12,7 @@ class ImageProcessor:
         
     def process_image(self, input_path: str, output_dir: str, index: int,
                      rotate: bool = True, scale: bool = False, crop: bool = False,
-                     scale_range: Tuple[float, float] = (0.5, 1.5),
+                     scale_range: Tuple[float, float] = (0.8, 1.5),  # 默认放大为主
                      crop_ratio: float = 0.8) -> Tuple[dict, str]:
         """
         处理单张图片，支持旋转、缩放和裁剪
@@ -39,6 +39,19 @@ class ImageProcessor:
                 processed_img = img.copy()
                 modifications = {}
                 
+                # 组合变换 - 缩放和旋转通常一起使用效果更好
+                if scale:
+                    # 偏向于放大的缩放因子
+                    scale_factor = random.uniform(scale_range[0], scale_range[1])
+                    new_size = tuple(int(dim * scale_factor) for dim in processed_img.size)
+                    # 兼容旧版本和新版本的PIL库
+                    try:
+                        processed_img = processed_img.resize(new_size, Image.Resampling.BICUBIC)
+                    except AttributeError:
+                        # 针对旧版本PIL的修复
+                        processed_img = processed_img.resize(new_size, Image.BICUBIC)
+                    modifications['scale'] = scale_factor
+                
                 # 随机旋转
                 if rotate:
                     angle = random.uniform(0, 360)
@@ -51,39 +64,23 @@ class ImageProcessor:
                         processed_img = processed_img.rotate(angle, expand=True, 
                                                            resample=Image.BICUBIC)
                     modifications['rotation'] = angle
-                    
-                    # 裁剪回原始尺寸
-                    new_w, new_h = processed_img.size
-                    center_x, center_y = new_w // 2, new_h // 2
-                    left = center_x - original_size[0] // 2
-                    top = center_y - original_size[1] // 2
-                    processed_img = processed_img.crop((left, top, 
-                                                      left + original_size[0],
-                                                      top + original_size[1]))
-                
-                # 随机缩放
-                if scale:
-                    scale_factor = random.uniform(scale_range[0], scale_range[1])
-                    new_size = tuple(int(dim * scale_factor) for dim in processed_img.size)
-                    # 兼容旧版本和新版本的PIL库
-                    try:
-                        processed_img = processed_img.resize(new_size, Image.Resampling.BICUBIC)
-                    except AttributeError:
-                        # 针对旧版本PIL的修复
-                        processed_img = processed_img.resize(new_size, Image.BICUBIC)
-                    modifications['scale'] = scale_factor
                 
                 # 随机裁剪
                 if crop:
                     w, h = processed_img.size
                     crop_w = int(w * crop_ratio)
                     crop_h = int(h * crop_ratio)
-                    left = random.randint(0, w - crop_w)
-                    top = random.randint(0, h - crop_h)
-                    processed_img = processed_img.crop((left, top, 
-                                                      left + crop_w, 
-                                                      top + crop_h))
-                    modifications['crop'] = (left, top, left + crop_w, top + crop_h)
+                    
+                    # 确保有足够的边缘可以裁剪
+                    if w > crop_w and h > crop_h:
+                        left = random.randint(0, w - crop_w)
+                        top = random.randint(0, h - crop_h)
+                        processed_img = processed_img.crop((left, top, 
+                                                          left + crop_w, 
+                                                          top + crop_h))
+                        modifications['crop'] = (left, top, left + crop_w, top + crop_h)
+                    else:
+                        print(f"警告: 图片尺寸过小，跳过裁剪操作 ({w}x{h})")
                 
                 # 生成输出文件名
                 original_name = os.path.splitext(os.path.basename(input_path))[0]
@@ -146,11 +143,24 @@ class ImageProcessor:
                 is_train = i < train_count
                 output_dir = train_dir if is_train else val_dir
                 
+                # 对每个变体使用随机组合的增强操作
+                current_operations = []
+                if 'rotate' in operations:
+                    current_operations.append('rotate')
+                if 'scale' in operations:
+                    current_operations.append('scale')
+                if 'crop' in operations and len(current_operations) > 0:  # 裁剪通常与其他操作结合
+                    current_operations.append('crop')
+                
+                # 确保至少有一个操作被选中
+                if not current_operations and operations:
+                    current_operations = [random.choice(operations)]
+                
                 modifications, output_path = self.process_image(
                     input_path, output_dir, i,
-                    rotate='rotate' in operations,
-                    scale='scale' in operations,
-                    crop='crop' in operations
+                    rotate='rotate' in current_operations,
+                    scale='scale' in current_operations,
+                    crop='crop' in current_operations
                 )
                 
                 if modifications:
@@ -169,7 +179,7 @@ class ImageProcessor:
 def main():
     processor = ImageProcessor()
     
-    print("图片处理工具 - 支持旋转、缩放、裁剪")
+    print("图片数据增强工具 - 支持旋转、缩放和裁剪")
     print("=" * 50)
     print("支持的图片格式: JPG, JPEG, PNG, BMP, TIFF")
     print("输出格式统一为JPG")
@@ -195,7 +205,7 @@ def main():
     # 选择操作
     print("\n请选择要执行的操作（多选）：")
     print("1. 旋转")
-    print("2. 缩放")
+    print("2. 缩放 (主要是放大)")
     print("3. 裁剪")
     
     while True:
